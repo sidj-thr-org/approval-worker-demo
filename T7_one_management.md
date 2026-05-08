@@ -1,4 +1,4 @@
-# T6: 1 Management
+# T7: 1 Management
 
 ## Team Structure
 ```json
