@@ -1,4 +1,4 @@
-# T1: 1 management + 1 Team Lead
+# T2: 1 management + 1 Team Lead
 
 ## Team Structure
 This will be the team structure
