@@ -1,7 +1,6 @@
 # T4: 1 Team Lead + 1 Team Member
 
 ## Team Structure
-This will be the team structure
 ```json
 {
   "org": "sidj-thr-org",
