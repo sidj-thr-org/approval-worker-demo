@@ -1,4 +1,4 @@
-# T6: 2 Team Member
+# T6: 1 Team Lead
 
 ## Team Structure
 ```json
