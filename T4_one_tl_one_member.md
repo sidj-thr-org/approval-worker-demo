@@ -36,6 +36,10 @@
         {
           "username": "sidj-ubq",
           "role": "member"
+        },
+        {
+          "username": "NamelsKing",
+          "role": "member"
         }
       ]
     }
