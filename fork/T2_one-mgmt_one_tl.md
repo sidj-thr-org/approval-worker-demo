@@ -1,4 +1,4 @@
-# T2: 1 management + 1 Team Lead
+# Fork T2: 1 management + 1 Team Lead
 
 ## Team Structure
 ```json
