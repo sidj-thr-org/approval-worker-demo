@@ -36,6 +36,10 @@
         {
           "username": "siddharthjaincodes",
           "role": "member"
+        },
+        {
+          "username": "NamelsKing",
+          "role": "member"
         }
       ]
     }
