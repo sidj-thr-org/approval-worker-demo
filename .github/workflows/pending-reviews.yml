@@ -40,11 +40,6 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
-            if (!process.env.PAT_TOKEN) {
-              core.setFailed("PAT_TOKEN secret is required for org team membership checks.");
-              return;
-            }
-
             const prNumber = context.payload.issue?.number ?? context.payload.pull_request?.number;
             if (!prNumber) {
                 core.setFailed("Unable to determine PR number from event payload.");
