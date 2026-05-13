@@ -40,6 +40,11 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
+            if (!process.env.PAT_TOKEN) {
+              core.setFailed("PAT_TOKEN secret is required for org team membership checks.");
+              return;
+            }
+
             const prNumber = context.payload.issue?.number ?? context.payload.pull_request?.number;
             if (!prNumber) {
                 core.setFailed("Unable to determine PR number from event payload.");
@@ -142,42 +147,32 @@ jobs:
                 ? `**Reviews:** All approval requirements are met.`
                 : `**Pending reviews:** Requires approval from ${formatOrList(neededRoles)}.`;
 
-            const commentBody = `## Review Status
+            console.log(`Status: ${reviewLine}`);
+            console.log(`Approvals — Mgmt: ${counts.mgmt}, TL: ${counts.tl}, Member: ${counts.member}`);
+            console.log(`Comment will be posted on: ${owner}/${repo} PR #${prNumber} (https://github.com/${owner}/${repo}/pull/${prNumber})`);
 
-                        **Current Status:** ${success ? "✅ APPROVED" : "❌ PENDING"}
-
-                        **Approvals so far:** Mgmt ${counts.mgmt}, TL ${counts.tl}, Member ${counts.member}
-
-                        ${reviewLine}
-
-                        *This comment is automatically updated when reviews change.*`;
-
-            const marker = "## Review Status";
-            const { data: existingComments } = await github.rest.issues.listComments({
-                owner,
-                repo,
-                issue_number: prNumber,
-                per_page: 100,
-            });
-
-            const botComment = existingComments.find(
-                (comment) =>
-                    comment.user?.login === "github-actions[bot]" &&
-                    comment.body?.includes(marker),
-            );
-
-            if (botComment) {
-                await github.rest.issues.updateComment({
-                    owner,
-                    repo,
-                    comment_id: botComment.id,
-                    body: commentBody,
-                });
-            } else {
-                await github.rest.issues.createComment({
-                    owner,
-                    repo,
-                    issue_number: prNumber,
-                    body: commentBody,
-                });
-            }
+            // TODO: post comment to PR once confirmed which PR and repo to target
+            // const commentBody = `## Review Status
+            //
+            //   **Current Status:** ${success ? "✅ APPROVED" : "❌ PENDING"}
+            //
+            //   **Approvals so far:** Mgmt ${counts.mgmt}, TL ${counts.tl}, Member ${counts.member}
+            //
+            //   ${reviewLine}
+            //
+            //   *This comment is automatically updated when reviews change.*`;
+            //
+            // const marker = "## Review Status";
+            // const { data: existingComments } = await github.rest.issues.listComments({
+            //   owner, repo, issue_number: prNumber, per_page: 100,
+            // });
+            //
+            // const botComment = existingComments.find(
+            //   c => c.user?.login === "github-actions[bot]" && c.body?.includes(marker),
+            // );
+            //
+            // if (botComment) {
+            //   await github.rest.issues.updateComment({ owner, repo, comment_id: botComment.id, body: commentBody });
+            // } else {
+            //   await github.rest.issues.createComment({ owner, repo, issue_number: prNumber, body: commentBody });
+            // }
