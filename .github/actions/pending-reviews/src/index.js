@@ -1,10 +1,12 @@
 const core = require("@actions/core");
 const github = require("@actions/github");
 
-// Minimum approvals required per role. All thresholds must be satisfied.
-const REQUIRED = { maintainer: 1, teamLead: 1, member: 0 };
-
 const DISPLAY = { maintainer: "Management", teamLead: "Team Lead", member: "Member" };
+
+// Rules mirror GitHub branch protection: 1 codeowner approval + 2 total approvals.
+const CODEOWNER_ROLES = ["maintainer", "teamLead"];
+const MIN_CODEOWNER   = 1;
+const MIN_TOTAL       = 2;
 
 async function run() {
   // PAT — needs read:org for team membership lookups.
@@ -61,13 +63,16 @@ async function run() {
     }
   }
 
-  const approved = Object.entries(REQUIRED).every(
-    ([role, minRequired]) => approvalCounts[role] >= minRequired,
+  const total              = Object.values(approvalCounts).reduce((sum, n) => sum + n, 0);
+  const codeownerApprovals = CODEOWNER_ROLES.reduce((sum, role) => sum + approvalCounts[role], 0);
+  const approved           = codeownerApprovals >= MIN_CODEOWNER && total >= MIN_TOTAL;
+
+  const pendingRoles = approved ? [] : (
+    codeownerApprovals < MIN_CODEOWNER
+      ? CODEOWNER_ROLES.filter((role) => approvalCounts[role] === 0)
+      : Object.keys(approvalCounts).filter((role) => approvalCounts[role] === 0)
   );
-  const pendingRoles = Object.entries(REQUIRED)
-    .filter(([role, minRequired]) => approvalCounts[role] < minRequired)
-    .map(([role]) => role);
-  const roleFormatter = new Intl.ListFormat("en", { type: "disjunction" });
+  const pendingMessage = pendingRoles.map((role) => DISPLAY[role]).join(" or ");
 
   if (headSha) {
     await commentOctokit.rest.repos.createCommitStatus({
@@ -76,9 +81,7 @@ async function run() {
       sha: headSha,
       state: approved ? "success" : "pending",
       context: "Pending Reviews",
-      description: approved
-        ? "All approval requirements met"
-        : `Needs: ${roleFormatter.format(pendingRoles.map((role) => DISPLAY[role]))}`,
+      description: approved ? "All approval requirements met" : `Needs: ${pendingMessage}`,
     });
   }
 
@@ -92,8 +95,7 @@ async function run() {
     `Approvals so far: ${approvalSummary}`,
   ];
   if (!approved) {
-    const pendingNames = roleFormatter.format(pendingRoles.map((role) => DISPLAY[role]));
-    commentLines.push(`\nPending reviews: Requires approval from ${pendingNames}.`);
+    commentLines.push(`\nPending reviews: Requires approval from ${pendingMessage}.`);
   }
   const commentBody = commentLines.join("\n");
 
