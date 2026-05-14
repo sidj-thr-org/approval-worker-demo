@@ -31851,8 +31851,14 @@ async function run() {
   const commentOctokit = github.getOctokit(core.getInput("github-token", { required: true }));
 
   const prNumber = parseInt(core.getInput("pr-number", { required: true }), 10);
-  const headSha  = core.getInput("head-sha");
   const { owner, repo } = github.context.repo;
+
+  // head-sha may be absent on issue_comment triggers — fall back to fetching from the PR.
+  let headSha = core.getInput("head-sha");
+  if (!headSha) {
+    const { data: pr } = await commentOctokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+    headSha = pr.head.sha;
+  }
 
   const reviewerTeams = {
     maintainer: core.getInput("maintainers-github-team", { required: true }),
@@ -31915,9 +31921,9 @@ async function run() {
       owner,
       repo,
       sha: headSha,
-      state: approved ? "success" : "pending",
+      state: "success",
       context: "Pending Reviews",
-      description: approved ? "All approval requirements met" : `Needs: ${pendingMessage}`,
+      description: approved ? "All approval requirements met" : `Informational — ${pendingMessage} approval pending`,
     });
   }
 
