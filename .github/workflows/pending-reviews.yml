@@ -1,4 +1,4 @@
-name: Pending Reviews Info
+name: Pending Reviews
 
 on:
   issue_comment:
@@ -13,49 +13,24 @@ permissions:
   statuses: write
 
 jobs:
-  get-pr:
+  check-approvals:
     if: |
       github.event_name == 'pull_request_target' ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
        contains(github.event.comment.body, 'pending_reviews'))
     runs-on: ubuntu-latest
-    outputs:
-      number: ${{ steps.pr.outputs.number }}
-      sha: ${{ steps.pr.outputs.sha }}
     steps:
-      - name: Resolve PR number and head SHA
-        id: pr
-        uses: actions/github-script@b7fb2001b410c9390cbe9e2c7d5cab7eefb7b29c  # v7.0.1
-        with:
-          github-token: ${{ secrets.PAT_TOKEN }}
-          script: |
-            const prNumber = context.payload.issue?.number ?? context.payload.pull_request?.number;
-            if (!prNumber) {
-              core.setFailed("Unable to determine PR number from event payload.");
-              return;
-            }
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber,
-            });
-            core.setOutput('number', String(prNumber));
-            core.setOutput('sha', pr.head.sha);
-
-  check-approvals:
-    needs: get-pr
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
-      - name: Run Pending Reviews Action
+      - name: Run pending-reviews action
         uses: ./.github/actions/pending-reviews
+        continue-on-error: true
         with:
           github-token: ${{ secrets.PAT_TOKEN }}
-          pr-number: ${{ needs.get-pr.outputs.number }}
-          pr-sha: ${{ needs.get-pr.outputs.sha }}
-          mgmt-team: qvac-mgmt
-          tl-team: qvac-internal-merge
-          member-team: qvac-internal-dev
+          pr-number:    ${{ github.event.pull_request.number || github.event.issue.number }}
+          head-sha:     ${{ github.event.pull_request.head.sha }}
+          maintainers-github-team: qvac-mgmt
+          team-leads-github-team:  qvac-internal-merge
+          members-github-team:     qvac-internal-dev

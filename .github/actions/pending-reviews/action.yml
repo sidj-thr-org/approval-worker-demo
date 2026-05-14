@@ -1,7 +1,7 @@
 name: Pending Reviews
 description: >
-  Checks PR approval requirements by role (management, team lead, team member)
-  and posts a commit status to the PR head SHA plus an informational PR comment.
+  Checks PR approval requirements across three reviewer roles and posts a commit
+  status to the PR head SHA plus an informational PR comment.
 
 inputs:
   github-token:
@@ -12,19 +12,25 @@ inputs:
   pr-number:
     description: PR number to check
     required: true
-  pr-sha:
-    description: PR head SHA to post the commit status on
+  head-sha:
+    description: PR head SHA to post the commit status on. Optional — skipped when not available (e.g. issue_comment trigger).
+    required: false
+  maintainers-github-team:
+    description: >
+      GitHub team slug for maintainer approvers (e.g. managers).
+      Used for urgent or escalated merges.
     required: true
-  mgmt-team:
-    description: GitHub team slug for management approvers
+  team-leads-github-team:
+    description: >
+      GitHub team slug for team lead approvers.
+      Primary reviewers whose approval is required to merge.
     required: true
-  tl-team:
-    description: GitHub team slug for team lead approvers
-    required: true
-  member-team:
-    description: GitHub team slug for team member approvers
+  members-github-team:
+    description: >
+      GitHub team slug for member approvers (e.g. developers).
+      Peer reviewers who count towards the approval requirement.
     required: true
 
 runs:
-  using: node20
+  using: node24
   main: dist/index.js
