@@ -10,7 +10,7 @@ async function run() {
   // PAT — needs read:org for team membership lookups.
   const orgOctokit     = github.getOctokit(core.getInput("pat-token", { required: true }));
   // Built-in GITHUB_TOKEN — comments and statuses posted from github-actions[bot].
-  const commentOctokit = github.getOctokit(process.env.GITHUB_TOKEN);
+  const commentOctokit = github.getOctokit(core.getInput("github-token", { required: true }));
 
   const prNumber = parseInt(core.getInput("pr-number", { required: true }), 10);
   const headSha  = core.getInput("head-sha");
