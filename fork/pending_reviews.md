@@ -12,6 +12,10 @@
         {
           "username": "tamer-hassan-tether",
           "role": "member"
+        }, 
+        {
+          "username": "sidj-ubq",
+          "role": "member"
         }
       ]
     },
@@ -35,10 +39,6 @@
         },
         {
           "username": "NamelsKing",
-          "role": "member"
-        }, 
-        {
-          "username": "sidj-ubq",
           "role": "member"
         }
       ]
