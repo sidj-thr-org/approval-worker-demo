@@ -4,10 +4,8 @@ description: >
   status to the PR head SHA plus an informational PR comment.
 
 inputs:
-  github-token:
-    description: >
-      PAT with read:org (for team membership lookups) and repo scope
-      (for commit statuses and PR comments).
+  pat-token:
+    description: PAT with read:org scope for team membership lookups.
     required: true
   pr-number:
     description: PR number to check
