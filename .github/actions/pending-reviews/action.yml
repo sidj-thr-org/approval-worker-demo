@@ -7,6 +7,10 @@ inputs:
   pat-token:
     description: PAT with read:org scope for team membership lookups.
     required: true
+  github-token:
+    description: Token for posting comments and commit statuses. Defaults to the built-in GITHUB_TOKEN (github-actions[bot]).
+    default: ${{ github.token }}
+    required: false
   pr-number:
     description: PR number to check
     required: true
