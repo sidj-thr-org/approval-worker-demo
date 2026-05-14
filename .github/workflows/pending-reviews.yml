@@ -10,9 +10,10 @@ permissions:
   contents: read
   pull-requests: read
   issues: write
+  statuses: write
 
 jobs:
-  pending-reviews:
+  get-pr:
     if: |
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
@@ -21,153 +22,42 @@ jobs:
        github.event.action == 'labeled' &&
        github.event.label.name == 'verified')
     runs-on: ubuntu-latest
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+      sha: ${{ steps.pr.outputs.sha }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-        with:
-          path: calling-repo
-
-      - name: Build pending review summary
+      - name: Resolve PR number and head SHA
+        id: pr
         uses: actions/github-script@b7fb2001b410c9390cbe9e2c7d5cab7eefb7b29c  # v7.0.1
-        env:
-          TEAM_MEMBER_TEAM: qvac-internal-dev
         with:
           github-token: ${{ secrets.PAT_TOKEN }}
           script: |
-            const fs = require('fs');
-            const path = require('path');
-
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-
             const prNumber = context.payload.issue?.number ?? context.payload.pull_request?.number;
             if (!prNumber) {
-                core.setFailed("Unable to determine PR number from event payload.");
-                return;
+              core.setFailed("Unable to determine PR number from event payload.");
+              return;
             }
-
-            // Copied from approval-check-worker: parses all @org/team-name entries on the '*' line
-            function parseMultipleTeams(content) {
-                const globalLine = content.split("\n").find((line) => line.trim().startsWith("* @"));
-                if (!globalLine) return null;
-
-                const teamMatches = globalLine.match(/@[\w-]+\/([\w-]+)/g);
-                if (!teamMatches) return null;
-
-                return teamMatches.map((match) => match.split("/")[1]);
-            }
-
-            // Copied from approval-check-worker: reads CODEOWNERS from the checked-out repo
-            function getRepoOwningTeam() {
-                const codeownersPath = path.join(process.cwd(), 'calling-repo', '.github', 'CODEOWNERS');
-                if (!fs.existsSync(codeownersPath)) return null;
-                const content = fs.readFileSync(codeownersPath, 'utf8');
-                return parseMultipleTeams(content);
-            }
-
-            // Copied from approval-check-worker: returns the list of org teams a user is active in
-            async function getUserTeams(username, teamsToCheck) {
-                const userTeams = [];
-                for (const teamSlug of teamsToCheck) {
-                    try {
-                        const { data: membership } = await github.rest.teams.getMembershipForUserInOrg({
-                            org: owner, team_slug: teamSlug, username,
-                        });
-                        if (membership.state === 'active') userTeams.push(teamSlug);
-                    } catch (error) {
-                        continue;
-                    }
-                }
-                return userTeams;
-            }
-
-            const teams = getRepoOwningTeam();
-            if (!teams || teams.length < 2) {
-                core.setFailed("Expected at least two teams in '*' CODEOWNERS entry.");
-                return;
-            }
-
-            const mgmtTeam = teams.find(t => /mgmt|management/i.test(t)) ?? teams[0];
-            const tlTeam = teams.find(t => t !== mgmtTeam) ?? teams[1];
-            const memberTeam = process.env.TEAM_MEMBER_TEAM;
-
-            // Fetch reviews, keeping only the latest review per user
-            const { data: reviews } = await github.rest.pulls.listReviews({
-                owner, repo, pull_number: prNumber, per_page: 100,
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
             });
+            core.setOutput('number', String(prNumber));
+            core.setOutput('sha', pr.head.sha);
 
-            const latestByUser = {};
-            for (const review of reviews) {
-                const reviewer = review.user?.login;
-                if (!reviewer) continue;
-                if (!latestByUser[reviewer] || review.submitted_at > latestByUser[reviewer].submitted_at) {
-                    latestByUser[reviewer] = review;
-                }
-            }
+  check-approvals:
+    needs: get-pr
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
-            // Count approved reviewers by role
-            const counts = { mgmt: 0, tl: 0, member: 0 };
-            for (const { user: { login } } of Object.values(latestByUser).filter(r => r.state === "APPROVED")) {
-                const userTeams = await getUserTeams(login, [mgmtTeam, tlTeam, memberTeam]);
-                if (userTeams.includes(mgmtTeam)) counts.mgmt++;
-                else if (userTeams.includes(tlTeam)) counts.tl++;
-                else if (userTeams.includes(memberTeam)) counts.member++;
-            }
-
-            // Check each valid approval path
-            const twoMgmt = counts.mgmt >= 2;
-            const oneMgmtOneTl = counts.mgmt >= 1 && counts.tl >= 1;
-            const twoTl = counts.tl >= 2;
-            const oneTlOneMember = counts.tl >= 1 && counts.member >= 1;
-
-            const success = twoMgmt || oneMgmtOneTl || twoTl || oneTlOneMember;
-
-            // Which roles are still needed in at least one unsatisfied path?
-            const needsMgmt = (!twoMgmt && counts.mgmt < 2) || (!oneMgmtOneTl && counts.mgmt < 1);
-            const needsTl = (!twoTl && counts.tl < 2) || (!oneMgmtOneTl && counts.tl < 1) || (!oneTlOneMember && counts.tl < 1);
-            const needsMember = (!oneTlOneMember && counts.member < 1);
-
-            const neededRoles = [
-                needsMgmt && "management",
-                needsTl && "team lead",
-                needsMember && "team member",
-            ].filter(Boolean);
-
-            function formatOrList(items) {
-                if (items.length <= 1) return items[0] ?? "";
-                return `${items.slice(0, -1).join(", ")} or ${items[items.length - 1]}`;
-            }
-
-            const reviewLine = success
-                ? `**Reviews:** All approval requirements are met.`
-                : `**Pending reviews:** Requires approval from ${formatOrList(neededRoles)}.`;
-
-            console.log(`Status: ${reviewLine}`);
-            console.log(`Approvals — Mgmt: ${counts.mgmt}, TL: ${counts.tl}, Member: ${counts.member}`);
-            console.log(`Comment will be posted on: ${owner}/${repo} PR #${prNumber} (https://github.com/${owner}/${repo}/pull/${prNumber})`);
-
-            // TODO: post comment to PR once confirmed which PR and repo to target
-            // const commentBody = `## Review Status
-            //
-            //   **Current Status:** ${success ? "✅ APPROVED" : "❌ PENDING"}
-            //
-            //   **Approvals so far:** Mgmt ${counts.mgmt}, TL ${counts.tl}, Member ${counts.member}
-            //
-            //   ${reviewLine}
-            //
-            //   *This comment is automatically updated when reviews change.*`;
-            //
-            // const marker = "## Review Status";
-            // const { data: existingComments } = await github.rest.issues.listComments({
-            //   owner, repo, issue_number: prNumber, per_page: 100,
-            // });
-            //
-            // const botComment = existingComments.find(
-            //   c => c.user?.login === "github-actions[bot]" && c.body?.includes(marker),
-            // );
-            //
-            // if (botComment) {
-            //   await github.rest.issues.updateComment({ owner, repo, comment_id: botComment.id, body: commentBody });
-            // } else {
-            //   await github.rest.issues.createComment({ owner, repo, issue_number: prNumber, body: commentBody });
-            // }
+      - name: Run Pending Reviews Action
+        uses: ./.github/actions/pending-reviews
+        with:
+          github-token: ${{ secrets.PAT_TOKEN }}
+          pr-number: ${{ needs.get-pr.outputs.number }}
+          pr-sha: ${{ needs.get-pr.outputs.sha }}
+          mgmt-team: qvac-mgmt
+          tl-team: qvac-internal-merge
+          member-team: qvac-internal-dev

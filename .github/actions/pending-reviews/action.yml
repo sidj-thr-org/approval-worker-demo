@@ -1,0 +1,30 @@
+name: Pending Reviews
+description: >
+  Checks PR approval requirements by role (management, team lead, team member)
+  and posts a commit status to the PR head SHA plus an informational PR comment.
+
+inputs:
+  github-token:
+    description: >
+      PAT with read:org (for team membership lookups) and repo scope
+      (for commit statuses and PR comments).
+    required: true
+  pr-number:
+    description: PR number to check
+    required: true
+  pr-sha:
+    description: PR head SHA to post the commit status on
+    required: true
+  mgmt-team:
+    description: GitHub team slug for management approvers
+    required: true
+  tl-team:
+    description: GitHub team slug for team lead approvers
+    required: true
+  member-team:
+    description: GitHub team slug for team member approvers
+    required: true
+
+runs:
+  using: node20
+  main: dist/index.js
