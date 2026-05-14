@@ -28,7 +28,7 @@ jobs:
         uses: ./.github/actions/pending-reviews
         continue-on-error: true
         with:
-          github-token: ${{ secrets.PAT_TOKEN }}
+          pat-token: ${{ secrets.PAT_TOKEN }}
           pr-number:    ${{ github.event.pull_request.number || github.event.issue.number }}
           head-sha:     ${{ github.event.pull_request.head.sha }}
           maintainers-github-team: qvac-mgmt

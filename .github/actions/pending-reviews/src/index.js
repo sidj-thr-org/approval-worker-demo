@@ -4,21 +4,26 @@ const github = require("@actions/github");
 // Minimum approvals required per role. All thresholds must be satisfied.
 const REQUIRED = { maintainer: 1, teamLead: 1, member: 0 };
 
+const DISPLAY = { maintainer: "Management", teamLead: "Team Lead", member: "Member" };
+
 async function run() {
-  const token = core.getInput("github-token", { required: true });
+  // PAT — needs read:org for team membership lookups.
+  const orgOctokit     = github.getOctokit(core.getInput("pat-token", { required: true }));
+  // Built-in GITHUB_TOKEN — comments and statuses posted from github-actions[bot].
+  const commentOctokit = github.getOctokit(process.env.GITHUB_TOKEN);
+
   const prNumber = parseInt(core.getInput("pr-number", { required: true }), 10);
-  const headSha = core.getInput("head-sha");
-  const octokit = github.getOctokit(token);
+  const headSha  = core.getInput("head-sha");
   const { owner, repo } = github.context.repo;
 
   const reviewerTeams = {
     maintainer: core.getInput("maintainers-github-team", { required: true }),
-    teamLead: core.getInput("team-leads-github-team", { required: true }),
-    member: core.getInput("members-github-team", { required: true }),
+    teamLead:   core.getInput("team-leads-github-team",  { required: true }),
+    member:     core.getInput("members-github-team",     { required: true }),
   };
 
   // Keep only the latest review per user.
-  const { data: rawReviews } = await octokit.rest.pulls.listReviews({
+  const { data: rawReviews } = await orgOctokit.rest.pulls.listReviews({
     owner,
     repo,
     pull_number: prNumber,
@@ -30,7 +35,7 @@ async function run() {
     return byUser;
   }, {});
 
-  // Count approvals per role
+  // Count approvals per role (highest-priority role wins for dual-role members).
   const approvalCounts = { maintainer: 0, teamLead: 0, member: 0 };
   for (const {
     user: { login },
@@ -38,7 +43,7 @@ async function run() {
     const activeSlugs = [];
     for (const teamSlug of Object.values(reviewerTeams)) {
       try {
-        const { data: membership } = await octokit.rest.teams.getMembershipForUserInOrg({
+        const { data: membership } = await orgOctokit.rest.teams.getMembershipForUserInOrg({
           org: owner,
           team_slug: teamSlug,
           username: login,
@@ -65,7 +70,7 @@ async function run() {
   const roleFormatter = new Intl.ListFormat("en", { type: "disjunction" });
 
   if (headSha) {
-    await octokit.rest.repos.createCommitStatus({
+    await commentOctokit.rest.repos.createCommitStatus({
       owner,
       repo,
       sha: headSha,
@@ -73,19 +78,26 @@ async function run() {
       context: "Pending Reviews",
       description: approved
         ? "All approval requirements met"
-        : `Needs: ${roleFormatter.format(pendingRoles)}`,
+        : `Needs: ${roleFormatter.format(pendingRoles.map((role) => DISPLAY[role]))}`,
     });
   }
 
-  const commentBody = [
-    `## Review Status`,
-    `**${approved ? "✅ APPROVED" : `❌ PENDING — requires approval from ${roleFormatter.format(pendingRoles)}`}**`,
-    `Approvals so far: ${Object.entries(approvalCounts)
-      .map(([role, count]) => `${role}: ${count}`)
-      .join(" | ")}`,
-  ].join("\n");
+  const approvalSummary = Object.entries(approvalCounts)
+    .map(([role, count]) => `${DISPLAY[role]} ${count}`)
+    .join(", ");
 
-  const { data: prComments } = await octokit.rest.issues.listComments({
+  const commentLines = [
+    `## Review Status`,
+    `**Current Status: ${approved ? "✅ APPROVED" : "❌ PENDING"}**`,
+    `Approvals so far: ${approvalSummary}`,
+  ];
+  if (!approved) {
+    const pendingNames = roleFormatter.format(pendingRoles.map((role) => DISPLAY[role]));
+    commentLines.push(`\nPending reviews: Requires approval from ${pendingNames}.`);
+  }
+  const commentBody = commentLines.join("\n");
+
+  const { data: prComments } = await commentOctokit.rest.issues.listComments({
     owner,
     repo,
     issue_number: prNumber,
@@ -98,14 +110,14 @@ async function run() {
   );
 
   if (existingComment) {
-    await octokit.rest.issues.updateComment({
+    await commentOctokit.rest.issues.updateComment({
       owner,
       repo,
       comment_id: existingComment.id,
       body: commentBody,
     });
   } else {
-    await octokit.rest.issues.createComment({
+    await commentOctokit.rest.issues.createComment({
       owner,
       repo,
       issue_number: prNumber,
