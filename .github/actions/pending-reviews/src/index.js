@@ -101,8 +101,6 @@ async function run() {
     '',
     reviewLine,
     '',
-    '---',
-    '*This comment is automatically updated when reviews change.*',
   ].join('\n');
 
   const { data: comments } = await octokit.rest.issues.listComments({
