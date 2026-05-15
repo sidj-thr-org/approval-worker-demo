@@ -31,7 +31,7 @@ async function run() {
   };
 
   // Keep only the latest review per user.
-  const { data: rawReviews } = await orgOctokit.rest.pulls.listReviews({
+  const { data: rawReviews } = await orgOctokit.rest.pulls.listReviews1({
     owner,
     repo,
     pull_number: prNumber,
@@ -51,7 +51,7 @@ async function run() {
     const activeSlugs = [];
     for (const teamSlug of Object.values(reviewerTeams)) {
       try {
-        const { data: membership } = await orgOctokit.rest.teams.getMembershipForUserInOrg1({
+        const { data: membership } = await orgOctokit.rest.teams.getMembershipForUserInOrg({
           org: owner,
           team_slug: teamSlug,
           username: login,
