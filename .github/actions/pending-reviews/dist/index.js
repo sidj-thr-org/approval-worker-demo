@@ -31916,16 +31916,16 @@ async function run() {
   );
   const pendingMessage = pendingRoles.map((role) => DISPLAY[role]).join(" or ");
 
-  if (headSha) {
-    await commentOctokit.rest.repos.createCommitStatus({
-      owner,
-      repo,
-      sha: headSha,
-      state: "success",
-      context: "Pending Reviews",
-      description: approved ? "All approval requirements met" : `Informational — ${pendingMessage} approval pending`,
-    });
-  }
+  // if (headSha) {
+  //   await commentOctokit.rest.repos.createCommitStatus({
+  //     owner,
+  //     repo,
+  //     sha: headSha,
+  //     state: "success",
+  //     context: "Pending Reviews",
+  //     description: approved ? "All approval requirements met" : `Informational — ${pendingMessage} approval pending`,
+  //   });
+  // }
 
   const approvalSummary = Object.entries(approvalCounts)
     .map(([role, count]) => `${DISPLAY[role]} ${count}`)
