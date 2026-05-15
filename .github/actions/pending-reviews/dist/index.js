@@ -30045,7 +30045,7 @@ async function upsertPrComment(octokit, owner, repo, prNumber, body) {
   }
 }
 
-module.exports = { fetchHeadSha, fetchReviews, hasWriteAccess, resolveRole, buildApprovalCounts, upsertPrComment };
+module.exports = { fetchReviews, hasWriteAccess, resolveRole, buildApprovalCounts, upsertPrComment };
 
 
 /***/ }),
