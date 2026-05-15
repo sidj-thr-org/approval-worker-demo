@@ -29922,6 +29922,134 @@ function wrappy (fn, cb) {
 
 /***/ }),
 
+/***/ 9682:
+/***/ ((module) => {
+
+const DISPLAY = { maintainer: "Management", teamLead: "Team Lead", other: "Member" };
+
+const MIN_CODEOWNER = 1;
+
+function getLatestApprovals(reviews) {
+  return reviews.reduce((byUser, review) => {
+    const username = review.user?.login;
+    if (username && (!byUser[username] || review.submitted_at > byUser[username].submitted_at)) {
+      byUser[username] = review;
+    }
+    return byUser;
+  }, {});
+}
+
+function checkApproved(counts, minTotal) {
+  const { maintainer = 0, teamLead = 0, other = 0 } = counts;
+  const codeowner = maintainer + teamLead;
+  const total = codeowner + other;
+  return codeowner >= MIN_CODEOWNER && total >= minTotal;
+}
+
+function getPendingMessage(counts, minTotal) {
+  const { maintainer = 0, teamLead = 0, other = 0 } = counts;
+  const codeowner = maintainer + teamLead;
+  const total = codeowner + other;
+
+  const missingCodeowner = Math.max(0, MIN_CODEOWNER - codeowner);
+  const missingTotal     = Math.max(0, minTotal - total);
+  const extraNeeded      = Math.max(0, missingTotal - missingCodeowner);
+
+  const parts = [];
+  if (missingCodeowner > 0) parts.push(`${missingCodeowner} Management or Team Lead`);
+  if (extraNeeded > 0)      parts.push(`${extraNeeded} more from Management, Team Lead, or Member`);
+  return parts.join(", and ");
+}
+
+function buildComment(approved, counts, pendingMessage) {
+  const approvalSummary = Object.entries(counts)
+    .map(([role, count]) => `${DISPLAY[role]} ${count}`)
+    .join(", ");
+
+  const lines = [
+    "## Review Status",
+    `**Current Status: ${approved ? "✅ APPROVED" : "❌ PENDING"}**`,
+    `Approvals so far: ${approvalSummary}`,
+  ];
+
+  if (!approved) lines.push(`\nPending reviews: Needs ${pendingMessage}.`);
+
+  return lines.join("\n");
+}
+
+module.exports = { DISPLAY, MIN_CODEOWNER, getLatestApprovals, checkApproved, getPendingMessage, buildComment };
+
+
+/***/ }),
+
+/***/ 6474:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const { getLatestApprovals } = __nccwpck_require__(9682);
+
+async function fetchReviews(octokit, owner, repo, prNumber) {
+  const { data: reviews } = await octokit.rest.pulls.listReviews({
+    owner, repo, pull_number: prNumber, per_page: 100,
+  });
+  return reviews;
+}
+
+// Only write/maintain/admin access counts — read-only collaborators are excluded.
+async function hasWriteAccess(octokit, owner, repo, login) {
+  try {
+    const { data } = await octokit.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username: login });
+    return ["write", "maintain", "admin"].includes(data.permission);
+  } catch {
+    return false;
+  }
+}
+
+async function resolveRole(octokit, org, login, reviewerTeams) {
+  for (const [role, teamSlug] of Object.entries(reviewerTeams)) {
+    try {
+      const { data: membership } = await octokit.rest.teams.getMembershipForUserInOrg({
+        org, team_slug: teamSlug, username: login,
+      });
+      if (membership.state === "active") return role;
+    } catch { /* 404 = not a member */ }
+  }
+  return "other";
+}
+
+async function buildApprovalCounts(octokit, org, repo, reviews, reviewerTeams) {
+  const latestByUser    = getLatestApprovals(reviews);
+  const approvedReviews = Object.values(latestByUser).filter((r) => r.state === "APPROVED");
+
+  const counts = { maintainer: 0, teamLead: 0, other: 0 };
+  for (const review of approvedReviews) {
+    const login = review.user.login;
+    if (!await hasWriteAccess(octokit, org, repo, login)) continue;
+    const role = await resolveRole(octokit, org, login, reviewerTeams);
+    counts[role]++;
+  }
+  return counts;
+}
+
+async function upsertPrComment(octokit, owner, repo, prNumber, body) {
+  const { data: comments } = await octokit.rest.issues.listComments({
+    owner, repo, issue_number: prNumber, per_page: 100,
+  });
+  const existing = comments.find(
+    (c) => c.user?.login === "github-actions[bot]" && c.body?.includes("## Review Status"),
+  );
+
+  if (existing) {
+    await octokit.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+  } else {
+    await octokit.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });
+  }
+}
+
+module.exports = { fetchReviews, hasWriteAccess, resolveRole, buildApprovalCounts, upsertPrComment };
+
+
+/***/ }),
+
 /***/ 2613:
 /***/ ((module) => {
 
@@ -31834,134 +31962,33 @@ module.exports = parseParams
 /******/ 	
 /************************************************************************/
 var __webpack_exports__ = {};
-const core = __nccwpck_require__(7484);
+const core   = __nccwpck_require__(7484);
 const github = __nccwpck_require__(3228);
 
-const DISPLAY = { maintainer: "Management", teamLead: "Team Lead", member: "Member" };
-
-// Rules mirror GitHub branch protection: 1 codeowner approval + 2 total approvals.
-const CODEOWNER_ROLES = ["maintainer", "teamLead"];
-const MIN_CODEOWNER   = 1;
-const MIN_TOTAL       = 2;
+const { checkApproved, getPendingMessage, buildComment } = __nccwpck_require__(9682);
+const { fetchReviews, buildApprovalCounts, upsertPrComment } = __nccwpck_require__(6474);
 
 async function run() {
-  // PAT — needs read:org for team membership lookups.
-  const orgOctokit     = github.getOctokit(core.getInput("pat-token", { required: true }));
-  // Built-in GITHUB_TOKEN — comments and statuses posted from github-actions[bot].
+  const orgOctokit     = github.getOctokit(core.getInput("pat-token",    { required: true }));
   const commentOctokit = github.getOctokit(core.getInput("github-token", { required: true }));
-
-  const prNumber = parseInt(core.getInput("pr-number", { required: true }), 10);
-  const headSha  = core.getInput("head-sha");
   const { owner, repo } = github.context.repo;
+
+  const prNumber = parseInt(core.getInput("pr-number",               { required: true }), 10);
+  const minTotal = parseInt(core.getInput("total-required-approvals", { required: true }), 10);
 
   const reviewerTeams = {
     maintainer: core.getInput("maintainers-github-team", { required: true }),
     teamLead:   core.getInput("team-leads-github-team",  { required: true }),
-    member:     core.getInput("members-github-team",     { required: true }),
   };
 
-  // Keep only the latest review per user.
-  const { data: rawReviews } = await orgOctokit.rest.pulls.listReviews({
-    owner,
-    repo,
-    pull_number: prNumber,
-    per_page: 100,
-  });
-  const latestByUser = rawReviews.reduce((byUser, review) => {
-    const username = review.user?.login;
-    if (username && (!byUser[username] || review.submitted_at > byUser[username].submitted_at)) byUser[username] = review;
-    return byUser;
-  }, {});
+  const reviews = await fetchReviews(orgOctokit, owner, repo, prNumber);
+  const counts  = await buildApprovalCounts(orgOctokit, owner, repo, reviews, reviewerTeams);
 
-  // Count approvals per role (highest-priority role wins for dual-role members).
-  const approvalCounts = { maintainer: 0, teamLead: 0, member: 0 };
-  for (const {
-    user: { login },
-  } of Object.values(latestByUser).filter((review) => review.state === "APPROVED")) {
-    const activeSlugs = [];
-    for (const teamSlug of Object.values(reviewerTeams)) {
-      try {
-        const { data: membership } = await orgOctokit.rest.teams.getMembershipForUserInOrg({
-          org: owner,
-          team_slug: teamSlug,
-          username: login,
-        });
-        if (membership.state === "active") activeSlugs.push(teamSlug);
-      } catch {
-        /* 404 = not in team */
-      }
-    }
-    for (const [role, teamSlug] of Object.entries(reviewerTeams)) {
-      if (activeSlugs.includes(teamSlug)) {
-        approvalCounts[role]++;
-        break;
-      }
-    }
-  }
+  const approved       = checkApproved(counts, minTotal);
+  const pendingMessage = approved ? "" : getPendingMessage(counts, minTotal);
+  const commentBody    = buildComment(approved, counts, pendingMessage);
 
-  const total              = Object.values(approvalCounts).reduce((sum, n) => sum + n, 0);
-  const codeownerApprovals = CODEOWNER_ROLES.reduce((sum, role) => sum + approvalCounts[role], 0);
-  const approved           = codeownerApprovals >= MIN_CODEOWNER && total >= MIN_TOTAL;
-
-  const pendingRoles = approved ? [] : (
-    codeownerApprovals < MIN_CODEOWNER
-      ? CODEOWNER_ROLES.filter((role) => approvalCounts[role] === 0)
-      : Object.keys(approvalCounts).filter((role) => approvalCounts[role] === 0)
-  );
-  const pendingMessage = pendingRoles.map((role) => DISPLAY[role]).join(" or ");
-
-  if (headSha) {
-    await commentOctokit.rest.repos.createCommitStatus({
-      owner,
-      repo,
-      sha: headSha,
-      state: approved ? "success" : "pending",
-      context: "Pending Reviews",
-      description: approved ? "All approval requirements met" : `Needs: ${pendingMessage}`,
-    });
-  }
-
-  const approvalSummary = Object.entries(approvalCounts)
-    .map(([role, count]) => `${DISPLAY[role]} ${count}`)
-    .join(", ");
-
-  const commentLines = [
-    `## Review Status`,
-    `**Current Status: ${approved ? "✅ APPROVED" : "❌ PENDING"}**`,
-    `Approvals so far: ${approvalSummary}`,
-  ];
-  if (!approved) {
-    commentLines.push(`\nPending reviews: Requires approval from ${pendingMessage}.`);
-  }
-  const commentBody = commentLines.join("\n");
-
-  const { data: prComments } = await commentOctokit.rest.issues.listComments({
-    owner,
-    repo,
-    issue_number: prNumber,
-    per_page: 100,
-  });
-  const existingComment = prComments.find(
-    (comment) =>
-      comment.user?.login === "github-actions[bot]" &&
-      comment.body?.includes("## Review Status"),
-  );
-
-  if (existingComment) {
-    await commentOctokit.rest.issues.updateComment({
-      owner,
-      repo,
-      comment_id: existingComment.id,
-      body: commentBody,
-    });
-  } else {
-    await commentOctokit.rest.issues.createComment({
-      owner,
-      repo,
-      issue_number: prNumber,
-      body: commentBody,
-    });
-  }
+  await upsertPrComment(commentOctokit, owner, repo, prNumber, commentBody);
 }
 
 run().catch((error) => core.setFailed(error.message));

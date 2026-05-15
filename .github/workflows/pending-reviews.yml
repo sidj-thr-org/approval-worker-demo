@@ -4,21 +4,25 @@ on:
   issue_comment:
     types: [created]
   pull_request_target:
-    types: [labeled]
+    types: [labeled, synchronize]
 
 permissions:
   contents: read
   pull-requests: write
   issues: write
-  statuses: write
 
 jobs:
   check-approvals:
     if: |
-      github.event_name == 'pull_request_target' ||
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request &&
-       contains(github.event.comment.body, 'pending_reviews'))
+      (
+        github.event_name == 'pull_request_target' &&
+        contains(fromJSON('["labeled","synchronize"]'), github.event.action) &&
+        contains(github.event.pull_request.labels.*.name, 'verified')
+      ) || (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, 'pending_reviews')
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -28,9 +32,8 @@ jobs:
         uses: ./.github/actions/pending-reviews
         continue-on-error: true
         with:
-          pat-token: ${{ secrets.PAT_TOKEN }}
-          pr-number:    ${{ github.event.pull_request.number || github.event.issue.number }}
-          head-sha:     ${{ github.event.pull_request.head.sha }}
+          pat-token:  ${{ secrets.PAT_TOKEN }}
+          pr-number:  ${{ github.event.pull_request.number || github.event.issue.number }}
           maintainers-github-team: qvac-mgmt
           team-leads-github-team:  qvac-internal-merge
-          members-github-team:     qvac-internal-dev
+          total-required-approvals: 2

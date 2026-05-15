@@ -8,15 +8,12 @@ inputs:
     description: PAT with read:org scope for team membership lookups.
     required: true
   github-token:
-    description: Token for posting comments and commit statuses. Defaults to the built-in GITHUB_TOKEN (github-actions[bot]).
+    description: Token for posting PR comments. Defaults to the built-in GITHUB_TOKEN (github-actions[bot]).
     default: ${{ github.token }}
     required: false
   pr-number:
     description: PR number to check
     required: true
-  head-sha:
-    description: PR head SHA to post the commit status on. Optional — skipped when not available (e.g. issue_comment trigger).
-    required: false
   maintainers-github-team:
     description: >
       GitHub team slug for maintainer approvers (e.g. managers).
@@ -27,12 +24,10 @@ inputs:
       GitHub team slug for team lead approvers.
       Primary reviewers whose approval is required to merge.
     required: true
-  members-github-team:
-    description: >
-      GitHub team slug for member approvers (e.g. developers).
-      Peer reviewers who count towards the approval requirement.
+  total-required-approvals:
+    description: Number of total approvals required to approve the PR
+    default: 2
     required: true
-
 runs:
   using: node24
   main: dist/index.js
