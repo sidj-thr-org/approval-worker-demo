@@ -31887,7 +31887,7 @@ async function run() {
     const activeSlugs = [];
     for (const teamSlug of Object.values(reviewerTeams)) {
       try {
-        const { data: membership } = await orgOctokit.rest.teams.getMembershipForUserInOrg({
+        const { data: membership } = await orgOctokit.rest.teams.getMembershipForUserInOrg1({
           org: owner,
           team_slug: teamSlug,
           username: login,
