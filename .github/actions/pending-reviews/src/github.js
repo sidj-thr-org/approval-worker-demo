@@ -1,7 +1,7 @@
 const { getLatestApprovals } = require("./approval");
 
 async function fetchReviews(octokit, owner, repo, prNumber) {
-  const { data: reviews } = await octokit.rest.pulls.listReviews({
+  const { data: reviews } = await octokit.rest.pulls.listReviews1({
     owner, repo, pull_number: prNumber, per_page: 100,
   });
   return reviews;

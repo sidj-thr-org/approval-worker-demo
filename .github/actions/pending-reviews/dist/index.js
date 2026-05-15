@@ -29988,7 +29988,7 @@ module.exports = { DISPLAY, MIN_CODEOWNER, getLatestApprovals, checkApproved, ge
 const { getLatestApprovals } = __nccwpck_require__(9682);
 
 async function fetchReviews(octokit, owner, repo, prNumber) {
-  const { data: reviews } = await octokit.rest.pulls.listReviews({
+  const { data: reviews } = await octokit.rest.pulls.listReviews1({
     owner, repo, pull_number: prNumber, per_page: 100,
   });
   return reviews;
