@@ -29922,6 +29922,134 @@ function wrappy (fn, cb) {
 
 /***/ }),
 
+/***/ 9682:
+/***/ ((module) => {
+
+const DISPLAY = { maintainer: "Management", teamLead: "Team Lead", other: "Member" };
+
+const MIN_CODEOWNER = 1;
+
+function getLatestApprovals(reviews) {
+  return reviews.reduce((byUser, review) => {
+    const username = review.user?.login;
+    if (username && (!byUser[username] || review.submitted_at > byUser[username].submitted_at)) {
+      byUser[username] = review;
+    }
+    return byUser;
+  }, {});
+}
+
+function checkApproved(counts, minTotal) {
+  const { maintainer = 0, teamLead = 0, other = 0 } = counts;
+  const codeowner = maintainer + teamLead;
+  const total = codeowner + other;
+  return codeowner >= MIN_CODEOWNER && total >= minTotal;
+}
+
+function getPendingMessage(counts, minTotal) {
+  const { maintainer = 0, teamLead = 0, other = 0 } = counts;
+  const codeowner = maintainer + teamLead;
+  const total = codeowner + other;
+
+  const missingCodeowner = Math.max(0, MIN_CODEOWNER - codeowner);
+  const missingTotal     = Math.max(0, minTotal - total);
+  const extraNeeded      = Math.max(0, missingTotal - missingCodeowner);
+
+  const parts = [];
+  if (missingCodeowner > 0) parts.push(`${missingCodeowner} Management or Team Lead`);
+  if (extraNeeded > 0)      parts.push(`${extraNeeded} more from Management, Team Lead, or Member`);
+  return parts.join(", and ");
+}
+
+function buildComment(approved, counts, pendingMessage) {
+  const approvalSummary = Object.entries(counts)
+    .map(([role, count]) => `${DISPLAY[role]} ${count}`)
+    .join(", ");
+
+  const lines = [
+    "## Review Status",
+    `**Current Status: ${approved ? "✅ APPROVED" : "❌ PENDING"}**`,
+    `Approvals so far: ${approvalSummary}`,
+  ];
+
+  if (!approved) lines.push(`\nPending reviews: Needs ${pendingMessage}.`);
+
+  return lines.join("\n");
+}
+
+module.exports = { DISPLAY, MIN_CODEOWNER, getLatestApprovals, checkApproved, getPendingMessage, buildComment };
+
+
+/***/ }),
+
+/***/ 6474:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const { getLatestApprovals } = __nccwpck_require__(9682);
+
+async function fetchReviews(octokit, owner, repo, prNumber) {
+  const { data: reviews } = await octokit.rest.pulls.listReviews({
+    owner, repo, pull_number: prNumber, per_page: 100,
+  });
+  return reviews;
+}
+
+// Only write/maintain/admin access counts — read-only collaborators are excluded.
+async function hasWriteAccess(octokit, owner, repo, login) {
+  try {
+    const { data } = await octokit.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username: login });
+    return ["write", "maintain", "admin"].includes(data.permission);
+  } catch {
+    return false;
+  }
+}
+
+async function resolveRole(octokit, org, login, reviewerTeams) {
+  for (const [role, teamSlug] of Object.entries(reviewerTeams)) {
+    try {
+      const { data: membership } = await octokit.rest.teams.getMembershipForUserInOrg({
+        org, team_slug: teamSlug, username: login,
+      });
+      if (membership.state === "active") return role;
+    } catch { /* 404 = not a member */ }
+  }
+  return "other";
+}
+
+async function buildApprovalCounts(octokit, org, repo, reviews, reviewerTeams) {
+  const latestByUser    = getLatestApprovals(reviews);
+  const approvedReviews = Object.values(latestByUser).filter((r) => r.state === "APPROVED");
+
+  const counts = { maintainer: 0, teamLead: 0, other: 0 };
+  for (const review of approvedReviews) {
+    const login = review.user.login;
+    if (!await hasWriteAccess(octokit, org, repo, login)) continue;
+    const role = await resolveRole(octokit, org, login, reviewerTeams);
+    counts[role]++;
+  }
+  return counts;
+}
+
+async function upsertPrComment(octokit, owner, repo, prNumber, body) {
+  const { data: comments } = await octokit.rest.issues.listComments({
+    owner, repo, issue_number: prNumber, per_page: 100,
+  });
+  const existing = comments.find(
+    (c) => c.user?.login === "github-actions[bot]" && c.body?.includes("## Review Status"),
+  );
+
+  if (existing) {
+    await octokit.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+  } else {
+    await octokit.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });
+  }
+}
+
+module.exports = { fetchReviews, hasWriteAccess, resolveRole, buildApprovalCounts, upsertPrComment };
+
+
+/***/ }),
+
 /***/ 2613:
 /***/ ((module) => {
 
@@ -31837,128 +31965,33 @@ var __webpack_exports__ = {};
 const core   = __nccwpck_require__(7484);
 const github = __nccwpck_require__(3228);
 
-// Returns the team slugs (from teamsToCheck) that username is an active member of.
-async function getUserTeams(octokit, org, username, teamsToCheck) {
-  const userTeams = [];
-  for (const teamSlug of teamsToCheck) {
-    try {
-      const { data } = await octokit.rest.teams.getMembershipForUserInOrg({
-        org, team_slug: teamSlug, username,
-      });
-      if (data.state === 'active') userTeams.push(teamSlug);
-    } catch {
-      // 404 = user not in team; skip silently
-    }
-  }
-  return userTeams;
-}
-
-// Formats ['a', 'b', 'c'] -> 'a, b or c'
-function formatOrList(items) {
-  if (items.length === 0) return '';
-  if (items.length === 1) return items[0];
-  return `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}`;
-}
+const { checkApproved, getPendingMessage, buildComment } = __nccwpck_require__(9682);
+const { fetchReviews, buildApprovalCounts, upsertPrComment } = __nccwpck_require__(6474);
 
 async function run() {
-  const token      = core.getInput('github-token', { required: true });
-  const prNumber   = parseInt(core.getInput('pr-number',   { required: true }), 10);
-  const prSha      = core.getInput('pr-sha',      { required: true });
-  const mgmtTeam   = core.getInput('mgmt-team',   { required: true });
-  const tlTeam     = core.getInput('tl-team',     { required: true });
-  const memberTeam = core.getInput('member-team', { required: true });
-
-  const octokit         = github.getOctokit(token);
+  const orgOctokit     = github.getOctokit(core.getInput("pat-token",    { required: true }));
+  const commentOctokit = github.getOctokit(core.getInput("github-token", { required: true }));
   const { owner, repo } = github.context.repo;
 
-  // Fetch reviews, keeping only the latest submission per reviewer
-  const { data: reviews } = await octokit.rest.pulls.listReviews({
-    owner, repo, pull_number: prNumber, per_page: 100,
-  });
+  const prNumber = parseInt(core.getInput("pr-number",               { required: true }), 10);
+  const minTotal = parseInt(core.getInput("total-required-approvals", { required: true }), 10);
 
-  const latestByUser = {};
-  for (const review of reviews) {
-    const login = review.user?.login;
-    if (!login) continue;
-    if (!latestByUser[login] || review.submitted_at > latestByUser[login].submitted_at) {
-      latestByUser[login] = review;
-    }
-  }
+  const reviewerTeams = {
+    maintainer: core.getInput("maintainers-github-team", { required: true }),
+    teamLead:   core.getInput("team-leads-github-team",  { required: true }),
+  };
 
-  // Count approvals by role
-  const counts = { mgmt: 0, tl: 0, member: 0 };
-  for (const { user: { login } } of Object.values(latestByUser).filter(r => r.state === 'APPROVED')) {
-    const userTeams = await getUserTeams(octokit, owner, login, [mgmtTeam, tlTeam, memberTeam]);
-    if      (userTeams.includes(mgmtTeam))   counts.mgmt++;
-    else if (userTeams.includes(tlTeam))     counts.tl++;
-    else if (userTeams.includes(memberTeam)) counts.member++;
-  }
+  const reviews = await fetchReviews(orgOctokit, owner, repo, prNumber);
+  const counts  = await buildApprovalCounts(orgOctokit, owner, repo, reviews, reviewerTeams);
 
-  core.info(`Approvals — Mgmt: ${counts.mgmt}, TL: ${counts.tl}, Member: ${counts.member}`);
+  const approved       = checkApproved(counts, minTotal);
+  const pendingMessage = approved ? "" : getPendingMessage(counts, minTotal);
+  const commentBody    = buildComment(approved, counts, pendingMessage);
 
-  // Valid approval paths: 2 Mgmt | 1 Mgmt + 1 TL | 2 TL | 1 TL + 1 Member
-  const twoMgmt        = counts.mgmt >= 2;
-  const oneMgmtOneTl   = counts.mgmt >= 1 && counts.tl >= 1;
-  const twoTl          = counts.tl >= 2;
-  const oneTlOneMember = counts.tl >= 1 && counts.member >= 1;
-
-  const success = twoMgmt || oneMgmtOneTl || twoTl || oneTlOneMember;
-
-  // Roles still needed across every unsatisfied path
-  const needsMgmt   = (!twoMgmt   && counts.mgmt   < 2) || (!oneMgmtOneTl  && counts.mgmt   < 1);
-  const needsTl     = (!twoTl     && counts.tl     < 2) || (!oneMgmtOneTl  && counts.tl     < 1) || (!oneTlOneMember && counts.tl < 1);
-  const needsMember = !oneTlOneMember && counts.member < 1;
-
-  const neededRoles = [
-    needsMgmt   && 'management',
-    needsTl     && 'team lead',
-    needsMember && 'team member',
-  ].filter(Boolean);
-
-  const reviewLine = success
-    ? '**Reviews:** All approval requirements are met.'
-    : `**Pending reviews:** Requires approval from ${formatOrList(neededRoles)}.`;
-
-  // Post commit status to the PR head SHA (makes this check visible in rulesets)
-  await octokit.rest.repos.createCommitStatus({
-    owner, repo,
-    sha:         prSha,
-    state:       success ? 'success' : 'pending',
-    context:     'Pending Reviews',
-    description: success ? 'All approval requirements met' : `Needs: ${formatOrList(neededRoles)}`,
-  });
-
-  // Create or update the informational PR comment
-  const commentBody = [
-    '## Review Status',
-    '',
-    `**Current Status:** ${success ? '✅ APPROVED' : '❌ PENDING'}`,
-    `**Approvals so far:** Mgmt ${counts.mgmt}, TL ${counts.tl}, Member ${counts.member}`,
-    '',
-    reviewLine,
-    '',
-    '---',
-    '*This comment is automatically updated when reviews change.*',
-  ].join('\n');
-
-  const { data: comments } = await octokit.rest.issues.listComments({
-    owner, repo, issue_number: prNumber, per_page: 100,
-  });
-
-  const existing = comments.find(
-    c => c.user?.login === 'github-actions[bot]' && c.body?.includes('## Review Status'),
-  );
-
-  if (existing) {
-    await octokit.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: commentBody });
-  } else {
-    await octokit.rest.issues.createComment({ owner, repo, issue_number: prNumber, body: commentBody });
-  }
-
-  core.info(`Review status posted — ${owner}/${repo} PR #${prNumber}`);
+  await upsertPrComment(commentOctokit, owner, repo, prNumber, commentBody);
 }
 
-run().catch(err => core.setFailed(err.message));
+run().catch((error) => core.setFailed(error.message));
 
 module.exports = __webpack_exports__;
 /******/ })()
