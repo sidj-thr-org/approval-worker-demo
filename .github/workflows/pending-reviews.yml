@@ -10,7 +10,6 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
-  statuses: write
 
 jobs:
   check-approvals:
@@ -33,9 +32,8 @@ jobs:
         uses: ./.github/actions/pending-reviews
         continue-on-error: true
         with:
-          pat-token: ${{ secrets.PAT_TOKEN }}
-          pr-number:    ${{ github.event.pull_request.number || github.event.issue.number }}
-          head-sha:     ${{ github.event.pull_request.head.sha }}
+          pat-token:  ${{ secrets.PAT_TOKEN }}
+          pr-number:  ${{ github.event.pull_request.number || github.event.issue.number }}
           maintainers-github-team: qvac-mgmt
           team-leads-github-team:  qvac-internal-merge
-          members-github-team:     qvac-internal-dev
+          total-required-approvals: 2
